@@ -1,3 +1,4 @@
+#graph.py
 from typing import List, Tuple
 import networkx as nx
 import matplotlib.pyplot as plt
@@ -9,6 +10,9 @@ class Graph:
         self.graph = _setup_graph()
         self.number_of_nodes = self.graph.number_of_nodes()
         self.adj_matrix = self.get_adj_matrix()
+        # Создаем маппинг между текстовыми и числовыми значениями
+        self.node_to_index = {node: idx for idx, node in enumerate(self.graph.nodes())}
+        self.index_to_node = {idx: node for node, idx in self.node_to_index.items()}
 
     def show_graph(self, start: str, finish:str):
         pos = nx.spring_layout(self.graph)
@@ -41,28 +45,19 @@ class Graph:
         print(f"Your adjacency matrix: \n"
               f" {self.adj_matrix}")
 
-    def get_path_length(self, path):
-        nodes_list = self.get_nodes_list()
-        path_indices = [nodes_list.index(node) for node in path]
-
-        total_length = 0
-        for i in range(len(path_indices) - 1):
-            start = path_indices[i]
-            end = path_indices[i + 1]
-
-            # Check if edge exists (not inf)
-            if self.adj_matrix[start][end] == float('inf'):
-                return float('inf')
-
-            total_length += self.adj_matrix[start][end]
-
-        return total_length
-
     def get_nodes_list(self)->List[str]:
         return list(self.graph.nodes())
 
     def get_adj_matrix(self):
-        return nx.to_numpy_array(self.graph, weight="weight", nonedge=np.inf)
+        nodes = list(self.graph.nodes())
+        n = len(nodes)
+        matrix = np.full((n, n), np.inf)  # Заполняем матрицу "бесконечностью"
+        np.fill_diagonal(matrix, 0)  # Задаем ноль для расстояний до самого себя
+        for i, node1 in enumerate(nodes):
+            for j, node2 in enumerate(nodes):
+                if self.graph.has_edge(node1, node2):
+                    matrix[i][j] = self.graph[node1][node2]['weight']  # Устанавливаем веса для связанных узлов
+        return matrix
 
 
 def _read_input_set(g):
@@ -136,20 +131,15 @@ def run_dialog(g: nx.Graph) -> nx.Graph:
     vertices = parse_vertices(
         input("Enter vertices names separated by commas: ")
     )
-    print(f"Your vertices: {vertices}")
-
     for vertex in vertices:
-        g.add_edge(vertex, vertex)
-        edges_input = input(
-            f"Enter neighbors for vertex '{vertex}' "
-            "(format: neighbor bandwidth), separated by commas: "
-        )
+        g.add_edge(vertex, vertex,weight=0)
+        edges_input = input()
         add_edges_to_graph(g, vertex, edges_input)
 
     return g
 
 
-def _setup_graph(debug: bool = False) -> nx.Graph:
+def _setup_graph() -> nx.Graph:
     """Initialize and setup the graph based on mode."""
     g = nx.Graph()
     return read_input_set(g) if DEBUG else run_dialog(g)

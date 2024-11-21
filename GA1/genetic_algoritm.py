@@ -1,6 +1,7 @@
-import math
+#genetic_algorithm.py
 import random
-from typing import List, Tuple
+
+import numpy as np
 
 from consts import *
 from utils import *
@@ -9,137 +10,195 @@ from utils import *
 class EvolutionMachine:
     def __init__(self, params: Dict):
         self.available_genes = params['genes']
-        self.fitness = params["fitness_func"]
+        self.node_to_index = params['node_to_index']
+        self.index_to_node = params['index_to_node']
+        self.start_node = params['start']
+        self.finish_node = params['finish']
+        self.evaluate_fitness = params["fitness_func"]
         self.population_size = params["population_size"]
         self.chromosome_length = params["chromosome_length"]
         self.mutation_rate = params["mutation_probability"]
         self.number_of_generations = params["number_of_generations"]
         self.evolving_mode = params["evolving_mode"]
+        self.adj_matrix = params["adj_matrix"]
 
         match params["crossover_variant"]:
             case "single": self.crossover = self.crossover_single
 
         self.population = self.initialize_population()
 
-    def generate_chromosome(self) -> List[str]:
-        """
-        Generate a chromosome using only available genes with equal slots
-        """
-        # Randomly choose how many different genes to use
-        genes_count_in_chromosome = random.randint(1, self.chromosome_length)
-        slots_count = genes_count_in_chromosome
+    def mutate(self, chromosome):
+        if random.random() < self.mutation_rate:
+            # Выбираем два случайных индекса для обмена, исключая начало и конец
+            i = random.randint(1, len(chromosome) - 2)
+            j = random.randint(1, len(chromosome) - 2)
 
-        # Select random genes from available ones
-        selected_genes = random.sample(self.available_genes, slots_count)
+            # Проверяем возможность обмена
+            prev_i = chromosome[i - 1]
+            next_i = chromosome[i + 1]
+            prev_j = chromosome[j - 1]
+            next_j = chromosome[j + 1]
 
-        chromosome = []
-        for gene in selected_genes:
-            slot = [gene for _ in range(math.floor(self.chromosome_length / slots_count))]
-            chromosome.extend(slot)
+            # Проверяем, что после обмена путь останется валидным
+            if (not np.isinf(self.adj_matrix[self.node_to_index[prev_i]][self.node_to_index[chromosome[j]]]) and
+                    not np.isinf(self.adj_matrix[self.node_to_index[chromosome[j]]][self.node_to_index[next_i]]) and
+                    not np.isinf(self.adj_matrix[self.node_to_index[prev_j]][self.node_to_index[chromosome[i]]]) and
+                    not np.isinf(self.adj_matrix[self.node_to_index[chromosome[i]]][self.node_to_index[next_j]])):
+                chromosome[i], chromosome[j] = chromosome[j], chromosome[i]
 
-        while len(chromosome) < self.chromosome_length:
-            chromosome.append(chromosome[-1])
-        return chromosome
+    def crossover_single(self, parent1, parent2):
+        # Выбираем точку разреза, исключая начальную и конечную точки
+        point = random.randint(1, len(parent1) - 2)
 
-    def crossover_single(self, parent1: List[str], parent2: List[str]) -> Tuple[List[str], List[str]]:
-        """Perform single-point crossover."""
-        crossover_point = random.randint(1, self.chromosome_length - 1)
-        child1 = parent1[:crossover_point] + parent2[crossover_point:]
-        child2 = parent2[:crossover_point] + parent1[crossover_point:]
-        return child1, child2
+        # Создаем начало пути из первого родителя
+        child = parent1[:point]
 
-    def mutation(self, chromosome: List[str]) -> List[str]:
-        """Mutate chromosome by randomly replacing genes with available ones."""
-        return [random.choice(self.available_genes)
-                if random.random() < self.mutation_rate
-                else gene
-                for gene in chromosome]
+        # Добавляем гены из второго родителя, проверяя возможность пути
+        current = child[-1]
+        remaining = [gene for gene in parent2 if gene not in child]
 
-    def selection(self) -> Tuple[List[str], List[str]]:
-        """
-        Tournament selection implementation that returns two parents.
-        Uses fitness scores to select the best individuals from random tournaments.
-        """
+        for gene in remaining:
+            # Проверяем существование пути между текущей и следующей вершиной
+            if not np.isinf(self.adj_matrix[self.node_to_index[current]][self.node_to_index[gene]]):
+                child.append(gene)
+                current = gene
 
-        def tournament_select() -> List[str]:
-            # Select random candidates for tournament
-            tournament_size = 5  # Standard tournament size
-            tournament_candidates = random.sample(self.population, tournament_size)
+        # Добавляем конечную точку, если возможно
+        if not np.isinf(self.adj_matrix[self.node_to_index[current]][self.node_to_index[self.finish_node]]):
+            child.append(self.finish_node)
 
-            # Find the best candidate based on fitness
-            best_candidate = min(tournament_candidates,
-                                 key=lambda chromosome: self.fitness(chromosome))
-            return best_candidate
+        # Если путь неполный или невозможен, генерируем новый
+        if len(child) < 2 or child[-1] != self.finish_node:
+            return self.initialize_valid_path()
 
-        # Select two parents using separate tournaments
-        parent1 = tournament_select()
-        parent2 = tournament_select()
+        return child
 
-        # Ensure parents are different
-        while parent2 == parent1:
-            parent2 = tournament_select()
+    def initialize_valid_path(self):
+        """Вспомогательный метод для генерации валидного пути"""
+        path = [self.start_node]
+        current = self.start_node
 
-        return parent1, parent2
+        while current != self.finish_node:
+            # Получаем возможные следующие вершины
+            next_nodes = [n for n in self.available_genes + [self.finish_node]
+                          if not np.isinf(self.adj_matrix[self.node_to_index[current]]
+                                          [self.node_to_index[n]])
+                          and n not in path]
 
+            if not next_nodes:
+                if not np.isinf(self.adj_matrix[self.node_to_index[current]]
+                                [self.node_to_index[self.finish_node]]):
+                    path.append(self.finish_node)
+                break
 
-    def initialize_population(self) -> List[List[str]]:
-        """Initialize population with valid chromosomes."""
-        return [self.generate_chromosome() for _ in range(self.population_size)]
+            current = random.choice(next_nodes)
+            path.append(current)
+
+        return path
+
+    def initialize_population(self):
+        population = []
+        for _ in range(self.population_size):
+            # Начинаем с начальной и конечной точки
+            path = [self.start_node]
+            current = self.start_node
+
+            # Добавляем промежуточные узлы
+            while current != self.finish_node:
+                # Получаем возможные следующие узлы
+                next_nodes = [n for n in self.available_genes + [self.finish_node]
+                              if not np.isinf(self.adj_matrix[self.node_to_index[current]]
+                                              [self.node_to_index[n]])
+                              and n not in path]  # Исключаем уже посещенные узлы
+
+                if not next_nodes:
+                    # Если нет доступных узлов, добавляем конечную точку если возможно
+                    if not np.isinf(self.adj_matrix[self.node_to_index[current]]
+                                    [self.node_to_index[self.finish_node]]):
+                        path.append(self.finish_node)
+                    break
+
+                # Выбираем случайный следующий узел
+                next_node = random.choice(next_nodes)
+                path.append(next_node)
+                current = next_node
+
+            # Если путь не заканчивается конечной точкой, начинаем заново
+            if path[-1] != self.finish_node:
+                continue
+
+            population.append(path)
+            if len(population) == self.population_size:
+                break
+
+        return population
+
+    def convert_path_to_indices(self, path):
+        return [self.node_to_index[node] for node in path]
+
+    def convert_indices_to_path(self, indices):
+        return [self.index_to_node[idx] for idx in indices]
+
+    def select_parents(self, fitnesses):
+        # Преобразуем значения fitness для максимизации
+        valid_fitnesses = [1 / (f + 1e-10) if not np.isinf(f) else 0 for f in fitnesses]
+        total_fitness = sum(valid_fitnesses)
+
+        if total_fitness == 0:
+            # Если нет валидных путей, создаем новые
+            return [self.initialize_population()[0] for _ in range(2)]
+
+        probabilities = [f / total_fitness for f in valid_fitnesses]
+        parents = random.choices(self.population, weights=probabilities, k=2)
+        return parents
 
     def evolve(self):
         """Main evolution loop."""
+        best_solution = None
+        best_fitness = float('inf')
+
         for generation in range(self.number_of_generations):
-            new_population = []
+            fitnesses = [self.evaluate_fitness(chromo) for chromo in self.population]
+            next_generation = []
+
+            min_fitness_idx = np.argmin(fitnesses)
+            if fitnesses[min_fitness_idx] < best_fitness:
+                best_fitness = fitnesses[min_fitness_idx]
+                best_solution = self.population[min_fitness_idx]
 
             if self.evolving_mode == "step-by-step":
-                print(f"Generation {generation + 1}:")
+                print(f"Generation {generation}")
+                print("Population and Fitnesses:", list(zip(self.population, fitnesses)))
 
-            # Create new population
             for _ in range(self.population_size // 2):
-                # Selection
-                parent1, parent2 = self.selection()
-                if self.evolving_mode == "step-by-step":
-                    print("  Selection:")
-                    print(f"    Parent 1: {parent1}")
-                    print(f"    Parent 2: {parent2}")
+                parent1, parent2 = self.select_parents(fitnesses)
+                child1 = self.crossover(parent1, parent2)
+                child2 = self.crossover(parent2, parent1)
+                self.mutate(child1)
+                self.mutate(child2)
+                next_generation.extend([child1, child2])
 
-                # Crossover
-                child1, child2 = self.crossover(parent1, parent2)
-                if self.evolving_mode == "step-by-step":
-                    print("  Crossover:")
-                    print(f"    Child 1: {child1}")
-                    print(f"    Child 2: {child2}")
+            population = sorted(next_generation, key=lambda chromo: self.evaluate_fitness(chromo))[:self.population_size]
 
-                # Mutation
-                child1 = self.mutation(child1)
-                child2 = self.mutation(child2)
-                if self.evolving_mode == "step-by-step":
-                    print("  Mutation:")
-                    print(f"    Child 1: {child1}")
-                    print(f"    Child 2: {child2}")
-
-                new_population.extend([child1, child2])
-
-            self.population = new_population
-
-            # Print statistics for cyclic mode
             if self.evolving_mode == "cyclic":
-                fitness_values = [self.fitness(individual) for individual in self.population]
-                avg_fitness = sum(fitness_values) / len(fitness_values)
-                best_fitness = max(fitness_values)
-                print(f"Generation {generation + 1} - Avg Fitness: {avg_fitness:.2f}, Best Fitness: {best_fitness}")
+                best_fitness = self.evaluate_fitness(population[0])
+                print(f"Generation {generation}: Best Fitness = {best_fitness}")
 
-        print("\nFinal population:")
-        for chromosome in self.population:
-            print(chromosome)
+        return best_solution if best_solution else self.population[0]
 
-def fitness_graph(graph, start, finish) -> Callable:
-    """Create fitness function for path finding."""
+
+def fitness_graph(graph, node_to_index) -> Callable:
     def fitness(chromosome):
-        path_length = graph.get_path_length(list(start) + chromosome + list(finish))
-        return path_length if path_length != float('inf') else float('inf')
+        fitness_value = 0
+        for i in range(len(chromosome) - 1):
+            current = node_to_index[chromosome[i]]
+            next_node = node_to_index[chromosome[i + 1]]
+            cost = graph[current][next_node]
+            if np.isinf(cost):
+                return float('inf')
+            fitness_value += cost
+        return fitness_value if fitness_value > 0 else float('inf')
     return fitness
-
 
 def setup_evolution_machine(params: Dict)-> EvolutionMachine:
     return EvolutionMachine(params)
