@@ -1,36 +1,86 @@
 import numpy as np
 from PIL import Image
 import os
+import json
+import random
+import shutil
 
-WIDTH=3
-HEIGHT=3
+WIDTH = 3
+HEIGHT = 3
 
-TEST_SIZE=20 # Размер тестовой выборки
-TRAIN_SIZE=10 # Размер обучающей выборки
+TRAIN_SIZE = 100  # Total size of training dataset
+TEST_SIZE = int(TRAIN_SIZE*0.10)  # Size of test dataset
+
+
+def generate_image():
+    array = np.random.randint(0, 2, size=(WIDTH, HEIGHT)) * 255
+    black_pixels = np.sum(array == 0)
+    label = 1 if black_pixels >= int((WIDTH*HEIGHT)/2) else 0
+    return array, label
+
 
 if __name__ == "__main__":
-    # Создаем папки для обучающей и тестовой выборок
+    # Create directories
     train_dir = f'train{WIDTH}x{HEIGHT}'
     test_dir = f'test{WIDTH}x{HEIGHT}'
+    true_test_dir = f'true_test{WIDTH}x{HEIGHT}'  # New true_test directory
+    # Remove old directories if they exist
+    if os.path.exists(train_dir):
+        shutil.rmtree(train_dir)
 
-    # Создаем директории, если они не существуют
-    os.makedirs(train_dir, exist_ok=True)
-    os.makedirs(test_dir, exist_ok=True)
+    if os.path.exists(test_dir):
+        shutil.rmtree(test_dir)
 
-    # Задаем количество изображений для генерации
-    num_train_images = TRAIN_SIZE
-    num_test_images = TEST_SIZE
+    if os.path.exists(true_test_dir):
+        shutil.rmtree(true_test_dir)
 
-    # Генерируем обучающую выборку
-    for i in range(num_train_images):
-        # Создаем случайное черно-белое изображение 3x3
-        array = np.random.randint(0, 2, size=(WIDTH, HEIGHT)) * 255
+    os.makedirs(train_dir)
+    os.makedirs(test_dir)
+    os.makedirs(true_test_dir)
+
+    # Generate all images first
+    all_images = []
+    for i in range(TRAIN_SIZE):
+        array, label = generate_image()
+        filename = f'image_{i}.png'
+        all_images.append((array, filename, label))
+
+    # Randomly select test images
+    test_indices = random.sample(range(TRAIN_SIZE), TEST_SIZE)
+
+    # Dictionaries for labels
+    train_labels = {}
+    test_labels = {}
+    true_test_labels = {}
+
+    # Process all images
+    for i, (array, filename, label) in enumerate(all_images):
         img = Image.fromarray(array.astype('uint8'), 'L')
-        img.save(os.path.join(train_dir, f'train_image_{i}.png'))
 
-    # Генерируем тестовую выборку
-    for i in range(num_test_images):
-        array = np.random.randint(0, 2, size=(WIDTH, HEIGHT)) * 255
+        if i in test_indices:
+            # Save as test image
+            img.save(os.path.join(test_dir, filename))
+            img.save(os.path.join(train_dir, filename))
+            test_labels[filename] = label
+            train_labels[filename] = label
+        else:
+            # Save as train image
+            img.save(os.path.join(train_dir, filename))
+            train_labels[filename] = label
+
+    for i in range(TRAIN_SIZE):  # Generating TRAIN_SIZE images for true_test
+        array, label = generate_image()
+        filename = f'true_test_image_{i}.png'
         img = Image.fromarray(array.astype('uint8'), 'L')
-        img.save(os.path.join(test_dir, f'test_image_{i}.png'))
+        img.save(os.path.join(true_test_dir, filename))
+        true_test_labels[filename] = label
+        
+    # Save labels to JSON files
+    with open(os.path.join(train_dir, 'labels.json'), 'w') as f:
+        json.dump(train_labels, f)
 
+    with open(os.path.join(test_dir, 'labels.json'), 'w') as f:
+        json.dump(test_labels, f)
+
+    with open(os.path.join(true_test_dir, 'labels.json'), 'w') as f:
+        json.dump(true_test_labels, f)
