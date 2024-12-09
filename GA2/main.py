@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                             QHBoxLayout, QPushButton, QLabel, QFileDialog,
                             QSpinBox, QDoubleSpinBox, QTextEdit, QTabWidget, QScrollArea)
 from PyQt6.QtGui import QPixmap
+from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtCore import Qt
 from PIL import Image
 
@@ -17,10 +18,28 @@ DEFAULT_EPOCHS=100
 DEFAULT_POPULATION_SIZE=100
 DEFAULT_MUTATION_RATE=0.01
 
+
 def bin_activate(z):
     return 1 if z >= 0 else 0
 
+
 class GeneticAlgorithm:
+    """
+        Класс реализует генетический алгоритм для обучения однослойного перцептрона.
+
+        Алгоритм использует:
+        - Отбор для выбора родителей
+        - Одноточечное скрещивание
+        - Гауссову мутацию
+        - Элитизм (сохранение лучшего решения)
+
+        Attributes:
+            input_size (int): Размер входного слоя (количество весов)
+            mutation_rate (float): Вероятность мутации каждого гена (0-1)
+            population_size (int): Размер популяции
+            population (list): Список особей-решений
+            weights (np.array): Текущие лучшие веса
+        """
     def __init__(self, input_size, mutation_rate=0.2, population_size=50):
         self.input_size = input_size
         self.mutation_rate = mutation_rate
@@ -113,8 +132,62 @@ class GeneticAlgorithm:
 
         return best_error, best_weights
 
+class TrainingThread(QThread):
+    """
+       Поток для асинхронного обучения нейронной сети.
+
+       Сигналы:
+           progress (str): Отправляет сообщение о прогрессе обучения
+           finished (object): Отправляет обученную нейронную сеть
+
+       Attributes:
+           neural_network: Экземпляр класса GeneticAlgorithm
+           training_images (list): Список обучающих изображений
+           training_labels (list): Список меток для обучающих изображений
+           epochs (int): Количество эпох обучения
+       """
+    progress = pyqtSignal(str)
+    finished = pyqtSignal(object)
+
+    def __init__(self, neural_network, training_images, training_labels, epochs):
+        super().__init__()
+        self.neural_network = neural_network
+        self.training_images = training_images
+        self.training_labels = training_labels
+        self.epochs = epochs
+
+    def run(self):
+        for epoch in range(self.epochs):
+            total_error = 0
+            for inputs, target in zip(self.training_images, self.training_labels):
+                error, weights = self.neural_network.train(inputs, target)
+                total_error += error
+            self.progress.emit(f"Epoch {epoch + 1}, Error: {total_error}")
+            if total_error == 0:
+                break
+        self.finished.emit(self.neural_network)
 
 class ImageRecognizer(QMainWindow):
+    """
+        Главное окно приложения для распознавания изображений с использованием перцептрона.
+
+        Функциональность:
+        - Загрузка и предобработка обучающих изображений
+        - Настройка параметров обучения нейронной сети
+        - Обучение с помощью генетического алгоритма
+        - Тестирование на новых изображениях
+
+        Attributes:
+            training_images (list): Набор обучающих изображений
+            training_labels (list): Метки для обучающих изображений
+            neural_network (GeneticAlgorithm): Экземпляр нейронной сети
+            input_size_spin (QSpinBox): Размер входного слоя
+            epochs_spin (QSpinBox): Количество эпох обучения
+            population_size_spin (QSpinBox): Размер популяции
+            mutation_rate_spin (QDoubleSpinBox): Коэффициент мутации
+            training_log (QTextEdit): Лог процесса обучения
+            results_layout (QVBoxLayout): Область отображения результатов
+        """
     def __init__(self):
         super().__init__()
         self.mutation_rate_spin = None
@@ -175,11 +248,14 @@ class ImageRecognizer(QMainWindow):
         buttons_layout = QHBoxLayout()
         load_btn = QPushButton("Load Training Images")
         load_btn.clicked.connect(self.load_training_images)
-        train_btn = QPushButton("Train")
-        train_btn.clicked.connect(self.train_neural_network)
+        self.train_btn = QPushButton("Train")
+        self.train_btn.clicked.connect(self.train_neural_network)
         buttons_layout.addWidget(load_btn)
-        buttons_layout.addWidget(train_btn)
+        buttons_layout.addWidget(self.train_btn)
         training_layout.addLayout(buttons_layout)
+
+
+
 
         # Training log
         self.training_log = QTextEdit()
@@ -241,27 +317,39 @@ class ImageRecognizer(QMainWindow):
             self.training_log.append("No training images loaded!")
             return
 
+        # Отключаем кнопку на время обучения
+        self.train_btn.setEnabled(False)
+        self.training_log.append("Training started...")
+
         input_size = self.input_size_spin.value()
         population_size = self.population_size_spin.value()
         mutation_rate = self.mutation_rate_spin.value()
         epochs = self.epochs_spin.value()
 
-        self.training_log.append(f"Input Size: {input_size}\tMutation Rate: {mutation_rate}\tPopulation Size: {population_size}\tEpochs: {epochs}")
+        self.training_log.append(f"Input Size: {input_size}\tMutation Rate: {mutation_rate}\t"
+                                 f"Population Size: {population_size}\tEpochs: {epochs}")
 
         self.neural_network = GeneticAlgorithm(input_size, mutation_rate, population_size)
 
-        for epoch in range(epochs):
-            total_error = 0
-            for inputs, target in zip(self.training_images, self.training_labels):
-                error, weights = self.neural_network.train(inputs, target)
-                total_error += error
+        # Создаем и запускаем поток обучения
+        self.training_thread = TrainingThread(
+            self.neural_network,
+            self.training_images,
+            self.training_labels,
+            epochs
+        )
+        self.training_thread.progress.connect(self.update_training_log)
+        self.training_thread.finished.connect(self.training_finished)
+        self.training_thread.start()
 
-            self.training_log.append(f"Epoch {epoch + 1}, Error: {total_error}")
-            if total_error == 0:
-                break
+    def update_training_log(self, message):
+        self.training_log.append(message)
 
+    def training_finished(self, trained_network):
+        self.neural_network = trained_network
         self.training_log.append("Training completed!")
         self.training_log.append(f"Final weights: {self.neural_network.weights}")
+        self.train_btn.setEnabled(True)
 
     def load_test_images(self):
         global result_widget
