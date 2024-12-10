@@ -12,6 +12,10 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtCore import Qt
 from PIL import Image
 
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
+import matplotlib.pyplot as plt
+
 
 DEFAULT_INPUT_SIZE=16
 DEFAULT_EPOCHS=100
@@ -155,16 +159,27 @@ class TrainingThread(QThread):
         self.training_images = training_images
         self.training_labels = training_labels
         self.epochs = epochs
+        self.is_running = True
+
+    def stop(self):
+        self.is_running = False
 
     def run(self):
         for epoch in range(self.epochs):
+            if not self.is_running:
+                break
+
             total_error = 0
             for inputs, target in zip(self.training_images, self.training_labels):
+                if not self.is_running:
+                    break
                 error, weights = self.neural_network.train(inputs, target)
                 total_error += error
+
             self.progress.emit(f"Epoch {epoch + 1}, Error: {total_error}")
             if total_error == 0:
                 break
+
         self.finished.emit(self.neural_network)
 
 class ImageRecognizer(QMainWindow):
@@ -190,16 +205,19 @@ class ImageRecognizer(QMainWindow):
         """
     def __init__(self):
         super().__init__()
+        self.plot_btn = None
+        self.plot_window = None
         self.mutation_rate_spin = None
         self.population_size_spin = None
         self.epochs_spin = None
         self.input_size_spin = None
         self.setWindowTitle("Image Recognition with Perceptron")
         self.setGeometry(100, 100, 800, 600)
-
+        self.training_thread = None
         self.training_images = []
         self.training_labels = []
         self.neural_network = None
+        self.error_history = []
 
         self.init_ui()
 
@@ -252,10 +270,13 @@ class ImageRecognizer(QMainWindow):
         self.train_btn.clicked.connect(self.train_neural_network)
         buttons_layout.addWidget(load_btn)
         buttons_layout.addWidget(self.train_btn)
+
+        # кнопка для вывода графика
+        self.plot_btn = QPushButton("Show Error Plot")
+        self.plot_btn.clicked.connect(self.show_error_plot)
+        buttons_layout.addWidget(self.plot_btn)
+
         training_layout.addLayout(buttons_layout)
-
-
-
 
         # Training log
         self.training_log = QTextEdit()
@@ -280,6 +301,7 @@ class ImageRecognizer(QMainWindow):
         self.results_layout = QVBoxLayout(scroll_widget)
         scroll_area.setWidget(scroll_widget)
         recognition_layout.addWidget(scroll_area)
+
 
         recognition_tab.setLayout(recognition_layout)
         tabs.addTab(recognition_tab, "Recognition")
@@ -312,13 +334,19 @@ class ImageRecognizer(QMainWindow):
             self.training_log.append(f"Loaded {len(self.training_images)} training images")
 
     def train_neural_network(self):
+        if self.train_btn.text() == "Stop":
+            self.training_thread.stop()
+            self.train_btn.setText("Train")
+            return
+
         self.training_log.clear()
+        self.training_log.append(f"Loaded {len(self.training_images)} training images")
+
         if not self.training_images:
             self.training_log.append("No training images loaded!")
             return
 
-        # Отключаем кнопку на время обучения
-        self.train_btn.setEnabled(False)
+        self.train_btn.setText("Stop")
         self.training_log.append("Training started...")
 
         input_size = self.input_size_spin.value()
@@ -327,11 +355,9 @@ class ImageRecognizer(QMainWindow):
         epochs = self.epochs_spin.value()
 
         self.training_log.append(f"Input Size: {input_size}\tMutation Rate: {mutation_rate}\t"
-                                 f"Population Size: {population_size}\tEpochs: {epochs}")
+                               f"Population Size: {population_size}\tEpochs: {epochs}")
 
         self.neural_network = GeneticAlgorithm(input_size, mutation_rate, population_size)
-
-        # Создаем и запускаем поток обучения
         self.training_thread = TrainingThread(
             self.neural_network,
             self.training_images,
@@ -342,14 +368,19 @@ class ImageRecognizer(QMainWindow):
         self.training_thread.finished.connect(self.training_finished)
         self.training_thread.start()
 
+
     def update_training_log(self, message):
         self.training_log.append(message)
+        # Извлекаем значение ошибки из сообщения
+        if "Error:" in message:
+            error = float(message.split("Error: ")[1])
+            self.error_history.append(error)
 
     def training_finished(self, trained_network):
         self.neural_network = trained_network
         self.training_log.append("Training completed!")
         self.training_log.append(f"Final weights: {self.neural_network.weights}")
-        self.train_btn.setEnabled(True)
+        self.train_btn.setText("Train")
 
     def load_test_images(self):
         global result_widget
@@ -409,6 +440,33 @@ class ImageRecognizer(QMainWindow):
 
             # Добавляем виджет в вертикальный layout результатов
             self.results_layout.addWidget(result_widget)
+
+    def show_error_plot(self):
+        if not self.error_history:
+            self.training_log.append("No training data available")
+            return
+
+        # Создаем окно для графика как атрибут класса
+        self.plot_window = QWidget()
+        self.plot_window.setWindowTitle("Error Distribution")
+        plot_layout = QVBoxLayout()
+
+        # Создаем график
+        figure = Figure(figsize=(8, 6))
+        canvas = FigureCanvasQTAgg(figure)
+        ax = figure.add_subplot(111)
+
+        # Строим график
+        epochs = range(1, len(self.error_history) + 1)
+        ax.plot(epochs, self.error_history, 'b-')
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('Error')
+        ax.set_title('Training Error Distribution')
+        ax.grid(True)
+
+        plot_layout.addWidget(canvas)
+        self.plot_window.setLayout(plot_layout)
+        self.plot_window.show()
 
 
 if __name__ == '__main__':
