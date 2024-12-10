@@ -477,33 +477,6 @@ class ImageRecognizer(QMainWindow):
             self.training_log.append("No training data available")
             return
 
-        # Создаем окно для графика как атрибут класса
-        self.plot_window = QWidget()
-        self.plot_window.setWindowTitle("Error Distribution")
-        plot_layout = QVBoxLayout()
-
-        # Создаем график
-        figure = Figure(figsize=(8, 6))
-        canvas = FigureCanvasQTAgg(figure)
-        ax = figure.add_subplot(111)
-
-        # Строим график
-        epochs = range(1, len(self.error_history) + 1)
-        ax.plot(epochs, self.error_history, 'b-')
-        ax.set_xlabel('Epoch')
-        ax.set_ylabel('Error')
-        ax.set_title('Training Error Distribution')
-        ax.grid(True)
-
-        plot_layout.addWidget(canvas)
-        self.plot_window.setLayout(plot_layout)
-        self.plot_window.show()
-
-    def show_error_plot(self):
-        if not self.error_history:
-            self.training_log.append("No training data available")
-            return
-
         if not hasattr(self, 'plot_window') or self.plot_window is None:
             self._create_plot_window()
         self._update_plot_data()
