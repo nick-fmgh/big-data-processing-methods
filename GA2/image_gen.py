@@ -23,7 +23,7 @@ def generate_image_by_criterion(match_criterion=True):
     while True:
         array = np.random.randint(0, 2, size=(WIDTH, HEIGHT)) * 255
         white_pixels = np.sum(array == 255)
-        matches = white_pixels == SIZE
+        matches = white_pixels >= SIZE/2
 
         if matches == match_criterion:
             return array, 1 if matches else 0

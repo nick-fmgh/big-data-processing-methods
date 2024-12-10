@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import random
+from idlelib.debugobj_r import remote_object_tree_item
 
 import numpy as np
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
@@ -20,136 +21,147 @@ import matplotlib.pyplot as plt
 DEFAULT_INPUT_SIZE=16
 DEFAULT_EPOCHS=100
 DEFAULT_POPULATION_SIZE=100
-DEFAULT_MUTATION_RATE=0.01
+DEFAULT_MUTATION_RATE=0.1
 
 
-def bin_activate(z):
-    return 1 if z >= 0 else 0
-
-
-class GeneticAlgorithm:
-    """
-        Класс реализует генетический алгоритм для обучения однослойного перцептрона.
-
-        Алгоритм использует:
-        - Отбор для выбора родителей
-        - Одноточечное скрещивание
-        - Гауссову мутацию
-        - Элитизм (сохранение лучшего решения)
-
-        Attributes:
-            input_size (int): Размер входного слоя (количество весов)
-            mutation_rate (float): Вероятность мутации каждого гена (0-1)
-            population_size (int): Размер популяции
-            population (list): Список особей-решений
-            weights (np.array): Текущие лучшие веса
-        """
-    def __init__(self, input_size, mutation_rate=0.2, population_size=50):
-        self.input_size = input_size
+class NeuralNetwork:
+    def __init__(self, neurons_count, mutation_rate=0.1, population_size=100):
+        self.is_running = None
+        self.neurons_count = neurons_count
+        # Добавляем параметры эволюционного алгоритма
+        # Уменьшаем начальные параметры эволюции
+        self.tau = 0.01  # Уменьшен темп мутагенеза
+        self.mu = 0.05  # Уменьшена сила мутагенеза
         self.mutation_rate = mutation_rate
         self.population_size = population_size
-        # Инициализация популяции случайными весами
+
+        # Инициализация популяции
         self.population = self._init_population()
-        self.weights = random.choice(self.population)
+        self.best_fitness = float('inf')
+        self.best_weights = None
+
+        self.progress_callback = None
 
     def _init_population(self):
-        return [np.random.uniform(-1, 1, self.input_size) for _ in range(self.population_size)]
+        # Инициализация популяции случайными весами
+        population = []
+        for _ in range(self.population_size):
+            # Добавляем гены для темпа и силы мутагенеза
+            weights = np.random.uniform(-1, 1, self.neurons_count)
+            individual = {
+                'weights': weights,
+                'tau': self.tau,
+                'mu': self.mu
+            }
+            population.append(individual)
+        return population
+
+    def sigmoid(self, x):
+        return 1 / (1 + np.exp(-x))
+
+    def predict(self, inputs, weights=None):
+        if weights is None:
+            weights = self.best_weights if self.best_weights is not None else self.population[0]['weights']
+        return self.sigmoid(np.dot(inputs, weights))
+
+    def _calculate_fitness(self, inputs, target, individual):
+        prediction = self.predict(inputs, individual['weights'])
+        return abs(target - prediction)
+
+    def _mutate(self, individual):
+        mutated = individual.copy()
+
+        # Мутация параметров эволюции
+        if random.random() < individual['tau']:
+            mutated['tau'] *= np.exp(random.uniform(-0.1, 0.1))
+            mutated['mu'] *= np.exp(random.uniform(-0.1, 0.1))
+
+        # Мутация весов
+        for i in range(len(mutated['weights'])):
+            if random.random() < mutated['tau']:
+                mutated['weights'][i] += random.uniform(-1, 1) * mutated['mu']
+
+        return mutated
 
     def _crossover(self, parent1, parent2):
-        # Одноточечное скрещивание
-        crossover_point = np.random.randint(0, self.input_size)
-        child = np.concatenate([
-            parent1[:crossover_point],
-            parent2[crossover_point:]
-        ])
+        # Равномерное скрещивание
+        child = {
+            'weights': np.zeros(self.neurons_count),
+            'tau': (parent1['tau'] + parent2['tau']) / 2,
+            'mu': (parent1['mu'] + parent2['mu']) / 2
+        }
+
+        for i in range(self.neurons_count):
+            if random.random() < 0.5:
+                child['weights'][i] = parent1['weights'][i]
+            else:
+                child['weights'][i] = parent2['weights'][i]
+
         return child
 
-    def _mutate(self, weights):
-        # Мутация с заданной вероятностью
-        for i in range(len(weights)):
-            if np.random.random() < self.mutation_rate:
-                weights[i] += np.random.normal(0, 0.1)
-        return weights
+    def set_progress_callback(self, callback):
+        self.progress_callback = callback
 
-    def _calculate_fitness(self, inputs, target):
-        prediction = self.predict(inputs)
-        error = abs(target - prediction)
-        return error
+    def stop_training(self):
+        self.is_running = False
 
-    def _select(self, population, fitness_scores):
-        # Размер турнира как процент от размера популяции (например, 20%)
-        tournament_size = max(2, int(self.population_size * 0.5))
-        new_population = []
+    def train(self, training_images, training_labels, epochs):
+        self.is_running = True  # Добавляем флаг
+        for epoch in range(epochs):
+            if not self.is_running:  # Проверяем флаг
+                break
 
-        for _ in range(tournament_size):
-            # Выбираем случайных участников турнира
-            tournament_indices = np.random.choice(
-                len(population),
-                min(tournament_size, len(population)),
-                replace=False
-            )
-            tournament_fitness = [fitness_scores[i] for i in tournament_indices]
+            total_error = 0
+            for inputs, target in zip(training_images, training_labels):
+                if not self.is_running:  # Проверяем флаг
+                    break
 
-            # Выбираем победителя турнира (с лучшим значением fitness)
-            winner_idx = tournament_indices[np.argmin(tournament_fitness)]
-            new_population.append(population[winner_idx])
+                # Оценка приспособленности популяции
+                fitness_scores = []
+                for individual in self.population:
+                    fitness = self._calculate_fitness(inputs, target, individual)
+                    fitness_scores.append(fitness)
 
-        return new_population
+                # Сохранение лучшего решения
+                best_idx = np.argmin(fitness_scores)
+                if fitness_scores[best_idx] < self.best_fitness:
+                    self.best_fitness = fitness_scores[best_idx]
+                    self.best_weights = self.population[best_idx]['weights'].copy()
 
+                # Отбор лучших особей
+                new_population = []
+                sorted_indices = np.argsort(fitness_scores)
+                elite_size = max(1, self.population_size // 10)
 
+                # Элитизм
+                for i in range(elite_size):
+                    new_population.append(self.population[sorted_indices[i]])
 
-    def best_error_best_weights(self, inputs, target):
-        fitness_scores = [self._calculate_fitness(inputs, target) for self.weights in self.population]
-        population_fitness = list(zip(fitness_scores, self.population))
-        sorted_population = sorted(population_fitness, key=lambda x: x[0])
-        return sorted_population[0]
+                # Создание нового поколения
+                while len(new_population) < self.population_size:
+                    tournament_size = 3
+                    parent1 = min(random.sample(self.population, tournament_size),
+                                  key=lambda x: self._calculate_fitness(inputs, target, x))
+                    parent2 = min(random.sample(self.population, tournament_size),
+                                  key=lambda x: self._calculate_fitness(inputs, target, x))
 
-    def predict(self, inputs):
-        return np.dot(inputs, self.weights)
+                    child = self._crossover(parent1, parent2)
+                    child = self._mutate(child)
+                    new_population.append(child)
 
-    @staticmethod
-    def activate(x):
-        return bin_activate(x)
+                self.population = new_population
+                total_error += self.best_fitness
 
-    def train(self, inputs, target):
-        fitness_scores = [self._calculate_fitness(inputs, target) for self.weights in self.population]
-        population_fitness = list(zip(fitness_scores, self.population))
-        sorted_population = sorted(population_fitness, key=lambda x: x[0])
-        best_error, best_weights = sorted_population[0]
+            # Вызов callback для логирования
+            if self.progress_callback:
+                self.progress_callback(f"Epoch {epoch + 1}, Error: {total_error}")
 
-        new_population = self._select(self.population, fitness_scores)
+            if total_error == 0:
+                break
 
-        # Скрещивание и мутация для создания потомков
-        while len(new_population) < self.population_size:
-            idx1, idx2 = 0, 0
-            while idx1 == idx2:
-                idx1 = np.random.randint(0, len(self.population))
-                idx2 = np.random.randint(0, len(self.population))
-            parent1 = self.population[idx1]
-            parent2 = self.population[idx2]
-            child = self._crossover(parent1, parent2)
-            child = self._mutate(child)
-            new_population.append(child)
-
-        self.population = new_population
-        self.weights = best_weights
-
-        return best_error, best_weights
+        return self.best_fitness, self.best_weights
 
 class TrainingThread(QThread):
-    """
-       Поток для асинхронного обучения нейронной сети.
-
-       Сигналы:
-           progress (str): Отправляет сообщение о прогрессе обучения
-           finished (object): Отправляет обученную нейронную сеть
-
-       Attributes:
-           neural_network: Экземпляр класса GeneticAlgorithm
-           training_images (list): Список обучающих изображений
-           training_labels (list): Список меток для обучающих изображений
-           epochs (int): Количество эпох обучения
-       """
     progress = pyqtSignal(str)
     finished = pyqtSignal(object)
 
@@ -160,27 +172,38 @@ class TrainingThread(QThread):
         self.training_labels = training_labels
         self.epochs = epochs
         self.is_running = True
+        # Устанавливаем callback для логирования
+        self.neural_network.set_progress_callback(self.progress.emit)
 
     def stop(self):
         self.is_running = False
+        self.neural_network.stop_training()  # Добавляем остановку
 
     def run(self):
-        for epoch in range(self.epochs):
-            if not self.is_running:
-                break
-
-            total_error = 0
-            for inputs, target in zip(self.training_images, self.training_labels):
-                if not self.is_running:
-                    break
-                error, weights = self.neural_network.train(inputs, target)
-                total_error += error
-
-            self.progress.emit(f"Epoch {epoch + 1}, Error: {total_error}")
-            if total_error == 0:
-                break
-
+        self.neural_network.train(self.training_images, self.training_labels, self.epochs)
         self.finished.emit(self.neural_network)
+
+
+class PlotThread(QThread):
+    """Поток для асинхронного обновления графика"""
+    plot_updated = pyqtSignal()
+
+    def __init__(self, ax, error_history):
+        super().__init__()
+        self.ax = ax
+        self.error_history = error_history
+
+    def run(self):
+        self.ax.clear()
+        epochs = range(1, len(self.error_history) + 1)
+        self.ax.plot(epochs, self.error_history, 'b-')
+        self.ax.set_xlabel('Epoch')
+        self.ax.set_ylabel('Error')
+        self.ax.set_title('Training Error Distribution')
+        self.ax.grid(True)
+        self.ax.relim()
+        self.ax.autoscale_view()
+        self.plot_updated.emit()
 
 class ImageRecognizer(QMainWindow):
     """
@@ -195,7 +218,7 @@ class ImageRecognizer(QMainWindow):
         Attributes:
             training_images (list): Набор обучающих изображений
             training_labels (list): Метки для обучающих изображений
-            neural_network (GeneticAlgorithm): Экземпляр нейронной сети
+            neural_network (NeuralNetwork): Экземпляр нейронной сети
             input_size_spin (QSpinBox): Размер входного слоя
             epochs_spin (QSpinBox): Количество эпох обучения
             population_size_spin (QSpinBox): Размер популяции
@@ -205,8 +228,15 @@ class ImageRecognizer(QMainWindow):
         """
     def __init__(self):
         super().__init__()
+        # plot
         self.plot_btn = None
         self.plot_window = None
+        self.figure = None
+        self.canvas = None
+        self.ax = None
+
+        self.plot_thread = None
+
         self.mutation_rate_spin = None
         self.population_size_spin = None
         self.epochs_spin = None
@@ -339,6 +369,9 @@ class ImageRecognizer(QMainWindow):
             self.train_btn.setText("Train")
             return
 
+        self.error_history = []
+        self._update_plot_data()
+
         self.training_log.clear()
         self.training_log.append(f"Loaded {len(self.training_images)} training images")
 
@@ -357,7 +390,7 @@ class ImageRecognizer(QMainWindow):
         self.training_log.append(f"Input Size: {input_size}\tMutation Rate: {mutation_rate}\t"
                                f"Population Size: {population_size}\tEpochs: {epochs}")
 
-        self.neural_network = GeneticAlgorithm(input_size, mutation_rate, population_size)
+        self.neural_network = NeuralNetwork(input_size, mutation_rate, population_size)
         self.training_thread = TrainingThread(
             self.neural_network,
             self.training_images,
@@ -371,15 +404,15 @@ class ImageRecognizer(QMainWindow):
 
     def update_training_log(self, message):
         self.training_log.append(message)
-        # Извлекаем значение ошибки из сообщения
         if "Error:" in message:
             error = float(message.split("Error: ")[1])
             self.error_history.append(error)
+            self._update_plot_data()
 
     def training_finished(self, trained_network):
         self.neural_network = trained_network
         self.training_log.append("Training completed!")
-        self.training_log.append(f"Final weights: {self.neural_network.weights}")
+        self.training_log.append(f"Final weights: {self.neural_network.best_weights}")
         self.train_btn.setText("Train")
 
     def load_test_images(self):
@@ -408,8 +441,7 @@ class ImageRecognizer(QMainWindow):
             img_path = os.path.join(directory, filename)
             if os.path.exists(img_path):
                 img_array = self.preprocess_image(img_path)
-                raw_prediction = self.neural_network.predict(img_array)
-                activated_prediction = self.neural_network.activation(raw_prediction)
+                prediction = self.neural_network.predict(img_array)
                 # Создаем виджет для каждого изображения
                 result_widget = QWidget()
                 result_layout = QVBoxLayout()
@@ -421,14 +453,13 @@ class ImageRecognizer(QMainWindow):
                 result_layout.addWidget(image_label)
 
                 # Результаты распознавания
-                result_text = (f"Prediction: {activated_prediction}\n"
-                             f"Expected: {expected}\n"
-                             f"Raw output: {raw_prediction:.4f}")
+                result_text = (f"Expected: {expected}\n"
+                             f"Prediction: {prediction:.4f}")
                 result_label = QLabel(result_text)
                 result_layout.addWidget(result_label)
 
                 # Set text color based on prediction accuracy
-                if activated_prediction == expected:
+                if abs(expected - prediction) < 0.001:
                     result_label.setStyleSheet("color: green;")
                 else:
                     result_label.setStyleSheet("color: red;")
@@ -467,6 +498,42 @@ class ImageRecognizer(QMainWindow):
         plot_layout.addWidget(canvas)
         self.plot_window.setLayout(plot_layout)
         self.plot_window.show()
+
+    def show_error_plot(self):
+        if not self.error_history:
+            self.training_log.append("No training data available")
+            return
+
+        if not hasattr(self, 'plot_window') or self.plot_window is None:
+            self._create_plot_window()
+        self._update_plot_data()
+        self.plot_window.show()
+
+    def _create_plot_window(self):
+        self.plot_window = QWidget()
+        self.plot_window.setWindowTitle("Error Distribution")
+
+        self.figure = Figure(figsize=(8, 6))
+        self.canvas = FigureCanvasQTAgg(self.figure)
+        self.ax = self.figure.add_subplot(111)
+
+        plot_layout = QVBoxLayout()
+        plot_layout.addWidget(self.canvas)
+        self.plot_window.setLayout(plot_layout)
+
+    def _update_plot_data(self):
+        if self.ax is None:
+            return
+
+        if self.plot_thread is not None and self.plot_thread.isRunning():
+            return
+
+        self.plot_thread = PlotThread(self.ax, self.error_history)
+        self.plot_thread.plot_updated.connect(self._on_plot_updated)
+        self.plot_thread.start()
+
+    def _on_plot_updated(self):
+        self.canvas.draw()
 
 
 if __name__ == '__main__':
