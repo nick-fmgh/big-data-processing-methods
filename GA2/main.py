@@ -29,9 +29,7 @@ class NeuralNetwork:
     def __init__(self, neurons_count, mutation_rate=0.1, population_size=100):
         self.is_running = None
         self.neurons_count = neurons_count
-        # Добавляем параметры эволюционного алгоритма
-        self.tau = 0.2  # Темп мутагенеза
-        self.mu = 0.1  # Сила мутагенеза
+
         self.mutation_rate = mutation_rate
         self.population_size = population_size
 
@@ -43,15 +41,11 @@ class NeuralNetwork:
         self.progress_callback = None
 
     def _init_population(self):
-        # Инициализация популяции случайными весами
         population = []
         for _ in range(self.population_size):
-            # Добавляем гены для темпа и силы мутагенеза
             weights = np.random.uniform(-1, 1, self.neurons_count)
             individual = {
-                'weights': weights,
-                'tau': self.tau,
-                'mu': self.mu
+                "weights": weights,
             }
             population.append(individual)
         return population
@@ -59,10 +53,13 @@ class NeuralNetwork:
     def sigmoid(self, x):
         return 1 / (1 + np.exp(-x))
 
+    def binary(self, x):
+        return 1 if x >= 0 else 0
+
     def predict(self, inputs, weights=None):
         if weights is None:
             weights = self.best_weights if self.best_weights is not None else self.population[0]['weights']
-        return self.sigmoid(np.dot(inputs, weights))
+        return self.binary(np.dot(inputs, weights))
 
     def _calculate_fitness(self, training_images, training_labels, individual):
         total_error = 0
@@ -78,14 +75,9 @@ class NeuralNetwork:
         mutated = individual.copy()
 
         # Мутация параметров эволюции
-        if random.random() < individual['tau']:
-            mutated['tau'] *= np.exp(random.uniform(-0.1, 0.1))
-            mutated['mu'] *= np.exp(random.uniform(-0.1, 0.1))
-
-        # Мутация весов
-        for i in range(len(mutated['weights'])):
-            if random.random() < mutated['tau']:
-                mutated['weights'][i] += random.uniform(-1, 1) * mutated['mu']
+        for i in range(len(mutated)):
+            if np.random.random() < self.mutation_rate:
+                mutated["weights"][i] += random.uniform(-1, 1)
 
         return mutated
 
@@ -93,18 +85,32 @@ class NeuralNetwork:
         # Отбор лучших особей
         new_population = []
         sorted_indices = np.argsort(fitness_scores)
-        elite_size = max(1, self.population_size // 10)
+        elite_size = max(1, int(self.population_size * 0.02))
 
         # Элитизм
         for i in range(elite_size):
             new_population.append(self.population[sorted_indices[i]])
 
+        for _ in range(tournament_size):
+            # Выбираем случайных участников турнира
+            tournament_indices = np.random.choice(
+                len(self.population),
+                min(tournament_size, len(self.population)),
+                replace=False
+            )
+            tournament_fitness = [fitness_scores[i] for i in tournament_indices]
+            # Выбираем победителя турнира (с лучшим значением fitness)
+            winner_idx = tournament_indices[np.argmin(tournament_fitness)]
+            new_population.append(self.population[winner_idx])
+
         # Создание нового поколения
         while len(new_population) < self.population_size:
-            parent1 = min(random.sample(self.population, tournament_size),
-                          key=lambda x: self._calculate_fitness(inputs, target, x))
-            parent2 = min(random.sample(self.population, tournament_size),
-                          key=lambda x: self._calculate_fitness(inputs, target, x))
+            idx1, idx2 = 0, 0
+            while idx1 == idx2:
+                idx1 = np.random.randint(0, len(self.population))
+                idx2 = np.random.randint(0, len(self.population))
+            parent1 = self.population[idx1]
+            parent2 = self.population[idx2]
 
             child = self._crossover(parent1, parent2)
             child = self._mutate(child)
@@ -116,8 +122,6 @@ class NeuralNetwork:
         # Равномерное скрещивание
         child = {
             'weights': np.zeros(self.neurons_count),
-            'tau': (parent1['tau'] + parent2['tau']) / 2,
-            'mu': (parent1['mu'] + parent2['mu']) / 2
         }
 
         for i in range(self.neurons_count):
