@@ -1,3 +1,4 @@
+import math
 import os
 import sys
 import json
@@ -29,9 +30,8 @@ class NeuralNetwork:
         self.is_running = None
         self.neurons_count = neurons_count
         # Добавляем параметры эволюционного алгоритма
-        # Уменьшаем начальные параметры эволюции
-        self.tau = 0.01  # Уменьшен темп мутагенеза
-        self.mu = 0.05  # Уменьшена сила мутагенеза
+        self.tau = 0.2  # Темп мутагенеза
+        self.mu = 0.1  # Сила мутагенеза
         self.mutation_rate = mutation_rate
         self.population_size = population_size
 
@@ -64,9 +64,15 @@ class NeuralNetwork:
             weights = self.best_weights if self.best_weights is not None else self.population[0]['weights']
         return self.sigmoid(np.dot(inputs, weights))
 
-    def _calculate_fitness(self, inputs, target, individual):
-        prediction = self.predict(inputs, individual['weights'])
-        return abs(target - prediction)
+    def _calculate_fitness(self, training_images, training_labels, individual):
+        total_error = 0
+        for inputs, target in zip(training_images, training_labels):
+            if not self.is_running:  # Проверяем флаг
+                break
+            prediction = self.predict(inputs, individual['weights'])
+            total_error += abs(target - prediction)
+
+        return total_error
 
     def _mutate(self, individual):
         mutated = individual.copy()
@@ -82,6 +88,29 @@ class NeuralNetwork:
                 mutated['weights'][i] += random.uniform(-1, 1) * mutated['mu']
 
         return mutated
+
+    def _select(self, fitness_scores, inputs, target, tournament_size=3):
+        # Отбор лучших особей
+        new_population = []
+        sorted_indices = np.argsort(fitness_scores)
+        elite_size = max(1, self.population_size // 10)
+
+        # Элитизм
+        for i in range(elite_size):
+            new_population.append(self.population[sorted_indices[i]])
+
+        # Создание нового поколения
+        while len(new_population) < self.population_size:
+            parent1 = min(random.sample(self.population, tournament_size),
+                          key=lambda x: self._calculate_fitness(inputs, target, x))
+            parent2 = min(random.sample(self.population, tournament_size),
+                          key=lambda x: self._calculate_fitness(inputs, target, x))
+
+            child = self._crossover(parent1, parent2)
+            child = self._mutate(child)
+            new_population.append(child)
+
+        return new_population
 
     def _crossover(self, parent1, parent2):
         # Равномерное скрещивание
@@ -111,52 +140,27 @@ class NeuralNetwork:
             if not self.is_running:  # Проверяем флаг
                 break
 
-            total_error = 0
-            for inputs, target in zip(training_images, training_labels):
-                if not self.is_running:  # Проверяем флаг
-                    break
+            # Оценка приспособленности популяции
+            fitness_scores = []
+            for individual in self.population:
+                fitness = self._calculate_fitness(training_images, training_labels, individual)
+                fitness_scores.append(fitness)
 
-                # Оценка приспособленности популяции
-                fitness_scores = []
-                for individual in self.population:
-                    fitness = self._calculate_fitness(inputs, target, individual)
-                    fitness_scores.append(fitness)
+            # Сохранение лучшего решения
+            best_idx = np.argmin(fitness_scores)
+            if fitness_scores[best_idx] < self.best_fitness:
+                self.best_fitness = fitness_scores[best_idx]
+                self.best_weights = self.population[best_idx]['weights'].copy()
 
-                # Сохранение лучшего решения
-                best_idx = np.argmin(fitness_scores)
-                if fitness_scores[best_idx] < self.best_fitness:
-                    self.best_fitness = fitness_scores[best_idx]
-                    self.best_weights = self.population[best_idx]['weights'].copy()
 
-                # Отбор лучших особей
-                new_population = []
-                sorted_indices = np.argsort(fitness_scores)
-                elite_size = max(1, self.population_size // 10)
-
-                # Элитизм
-                for i in range(elite_size):
-                    new_population.append(self.population[sorted_indices[i]])
-
-                # Создание нового поколения
-                while len(new_population) < self.population_size:
-                    tournament_size = 3
-                    parent1 = min(random.sample(self.population, tournament_size),
-                                  key=lambda x: self._calculate_fitness(inputs, target, x))
-                    parent2 = min(random.sample(self.population, tournament_size),
-                                  key=lambda x: self._calculate_fitness(inputs, target, x))
-
-                    child = self._crossover(parent1, parent2)
-                    child = self._mutate(child)
-                    new_population.append(child)
-
-                self.population = new_population
-                total_error += self.best_fitness
+            self.population = self._select(fitness_scores, training_images, training_labels)
+            best_error = self.best_fitness
 
             # Вызов callback для логирования
             if self.progress_callback:
-                self.progress_callback(f"Epoch {epoch + 1}, Error: {total_error}")
+                self.progress_callback(f"Epoch {epoch + 1}, Error: {best_error}")
 
-            if total_error == 0:
+            if best_error == 0:
                 break
 
         return self.best_fitness, self.best_weights
@@ -442,6 +446,7 @@ class ImageRecognizer(QMainWindow):
             if os.path.exists(img_path):
                 img_array = self.preprocess_image(img_path)
                 prediction = self.neural_network.predict(img_array)
+                rounded_prediction = round(prediction)
                 # Создаем виджет для каждого изображения
                 result_widget = QWidget()
                 result_layout = QVBoxLayout()
@@ -453,13 +458,16 @@ class ImageRecognizer(QMainWindow):
                 result_layout.addWidget(image_label)
 
                 # Результаты распознавания
-                result_text = (f"Expected: {expected}\n"
-                             f"Prediction: {prediction:.4f}")
+                result_text = (
+                    f"Prediction: {rounded_prediction}\n"
+                    f"Expected: {expected}\n"
+                    f"Raw: {prediction:.4f}"
+                )
                 result_label = QLabel(result_text)
                 result_layout.addWidget(result_label)
 
                 # Set text color based on prediction accuracy
-                if abs(expected - prediction) < 0.001:
+                if rounded_prediction == expected:
                     result_label.setStyleSheet("color: green;")
                 else:
                     result_label.setStyleSheet("color: red;")
