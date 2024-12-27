@@ -1,4 +1,3 @@
-import math
 import os
 import sys
 import json
@@ -163,7 +162,7 @@ class ImageRecognizer(QMainWindow):
             total_error = 0
             for inputs, target in zip(self.training_images, self.training_labels):
                 error, weights, bias = self.perceptron.train(inputs, target)
-                total_error += np.mod(error)
+                total_error += abs(error)
 
             self.training_log.append(f"Epoch {epoch + 1}, Error: {total_error}")
             if total_error == 0:
@@ -198,7 +197,8 @@ class ImageRecognizer(QMainWindow):
             img_path = os.path.join(directory, filename)
             if os.path.exists(img_path):
                 img_array = self.preprocess_image(img_path)
-                prediction, summation = self.perceptron.activation(self.perceptron.predict(img_array))
+                prediction, summation = self.perceptron.predict(img_array)
+                prediction = self.perceptron.activation(prediction)
                 # Создаем виджет для каждого изображения
                 result_widget = QWidget()
                 result_layout = QVBoxLayout()

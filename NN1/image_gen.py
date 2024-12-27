@@ -5,10 +5,10 @@ import json
 import random
 import shutil
 
-WIDTH = 3
-HEIGHT = 3
+WIDTH = 4
+HEIGHT = 4
 
-TRAIN_SIZE = 100  # Total size of training dataset
+TRAIN_SIZE = 20  # Total size of training dataset
 TEST_SIZE = int(TRAIN_SIZE*0.10)  # Size of test dataset
 
 
