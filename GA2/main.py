@@ -93,11 +93,13 @@ class NeuralNetwork:
         # Отбор лучших особей
         new_population = []
         sorted_indices = np.argsort(fitness_scores)
-        elite_size = max(1, self.population_size // 10)
+        elite_size = max(1, int(self.population_size * 0.1))
 
         # Элитизм
-        for i in range(elite_size):
+        for i in range(elite_size-int(elite_size*0.1)):
             new_population.append(self.population[sorted_indices[i]])
+        for i in range(int(elite_size*0.1)):
+            new_population.append(self.population[random.randint(0, elite_size-1)])
 
         # Создание нового поколения
         while len(new_population) < self.population_size:
